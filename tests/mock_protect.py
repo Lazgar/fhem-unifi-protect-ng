@@ -119,6 +119,8 @@ class Api(BaseHTTPRequestHandler):
         if p == "/v1/meta/info":
             return self._send(200, {"applicationVersion": "7.2.105"})
         parts = p.strip("/").split("/")          # v1, cameras, id, snapshot
+        if len(parts) == 2 and parts[1] == "nvrs":
+            return self._send(200, DEVICES["nvrs"][0])          # the real API returns a single object here
         if len(parts) == 2 and parts[1] in DEVICES and parts[1] not in MISSING:
             return self._send(200, DEVICES[parts[1]])
         if len(parts) == 2 and parts[1] in MISSING:

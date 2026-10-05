@@ -166,6 +166,7 @@ def main():
         lig = "UProtNG_light_Hof_Flutlicht"
         check("camera readings: micVolume/statusLed/hdrType", (reading(cam, "micVolume"), reading(cam, "statusLed"), reading(cam, "hdrType")) == ("50", "on", "auto"),
               (reading(cam, "micVolume"), reading(cam, "statusLed"), reading(cam, "hdrType")))
+        check("nvr (single object answer) is created", "UProtNG_nvr_Test_NVR" in n, n)
         check("camera state internal 'connected'", internal(cam, "STATE") == "connected", internal(cam, "STATE"))
         check("sensor readings: temperature/humidity/battery", (reading(sen, "temperature"), reading(sen, "humidity"), reading(sen, "batteryPercentage")) == ("21.5", "55", "87"),
               (reading(sen, "temperature"), reading(sen, "humidity"), reading(sen, "batteryPercentage")))

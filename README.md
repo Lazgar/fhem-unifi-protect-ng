@@ -52,6 +52,10 @@ Not available through the Integration API, therefore not available here: IR LED 
 health values (WiFi quality, uptime), event statistics and NVR statistics (CPU, storage, disk health). A hybrid setup with an older
 module for those values is possible; the two modules do not interfere with each other.
 
+## Notes
+* Install new versions and **restart FHEM** (`shutdown restart`). `reload` is not enough for a bridge that already dispatched messages (FHEM caches the client list).
+* `/v1/nvrs` of the real API returns a single object; lists that a console does not provide (e.g. no chimes) are skipped, they never block the connection.
+
 ## Tests
 `python3 tests/run_tests.py` starts a mock Protect console (`tests/mock_protect.py`, HTTPS + WebSocket, Python standard library only)
 and a throw-away FHEM instance on private ports. It checks API key handling, autocreate, readings, events (motion, smart detection, ring,

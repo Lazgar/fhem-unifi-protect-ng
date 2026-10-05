@@ -250,19 +250,21 @@ sub UnifiProtectNG_LoadAll {
     UnifiProtectNG_Api($hash, 'GET', "/v1/$ep", undef, sub {
       my ($h, $json, $raw, $code, $err, $x) = @_;
       return if ($h->{helper}{gen} != $gen);
-      if (!$err && $code == 200 && ref($json) eq 'ARRAY') {
+      if (!$err && $code == 200 && (ref($json) eq 'ARRAY' || ref($json) eq 'HASH')) {
+        my @items = ref($json) eq 'ARRAY' ? @$json : ($json);       # /v1/nvrs returns a single object
         my $n = 0;
-        foreach my $item (@$json) {
-          next if (ref($item) ne 'HASH');
+        foreach my $item (@items) {
+          next if (ref($item) ne 'HASH' || !defined $item->{id});
           $item->{modelKey} //= $UPNG_LISTS{$ep};
           UnifiProtectNG_DispatchDevice($h, $item, 'full');
           $n++;
         }
         readingsSingleUpdate($h, 'nr' . ucfirst($ep), $n, 0);
-      } elsif ($code == 404) {
-        Log3 $name, 4, "$name: /v1/$ep not available on this console";   # e.g. Protect without chimes
+      } elsif ($err || $code == 0 || $code >= 500) {
+        $ok = 0;                                                    # transport problem: retry the whole connect
       } else {
-        $ok = 0;
+        # 404 (e.g. no chimes/viewers on this console) or another client error: not fatal, the other lists and websockets still work
+        Log3 $name, 3, "$name: /v1/$ep not usable (HTTP $code), skipped";
       }
       return if (--$pending > 0);
       if ($ok) {
@@ -487,9 +489,9 @@ sub UnifiProtectNG_LoadAllRefresh {
   foreach my $ep (sort keys %UPNG_LISTS) {
     UnifiProtectNG_Api($hash, 'GET', "/v1/$ep", undef, sub {
       my ($h, $json, $raw, $code, $err, $x) = @_;
-      return if ($err || $code != 200 || ref($json) ne 'ARRAY');
-      foreach my $item (@$json) {
-        next if (ref($item) ne 'HASH');
+      return if ($err || $code != 200 || (ref($json) ne 'ARRAY' && ref($json) ne 'HASH'));
+      foreach my $item (ref($json) eq 'ARRAY' ? @$json : ($json)) {
+        next if (ref($item) ne 'HASH' || !defined $item->{id});
         $item->{modelKey} //= $UPNG_LISTS{$ep};
         UnifiProtectNG_DispatchDevice($h, $item, 'full');
       }
