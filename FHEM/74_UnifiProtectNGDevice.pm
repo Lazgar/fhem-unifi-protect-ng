@@ -273,7 +273,7 @@ sub UnifiProtectNGDevice_Live {
   $width = 640 if (!defined $width || $width !~ /^\d+$/);
   (my $id = "upng_$d") =~ s/[^A-Za-z0-9_]/_/g;
   my $base = "$FW_ME/UnifiProtectNG?dev=$d&width=$width";
-  return "<div class='upngLive'><img id='$id' width='$width' style='max-width:100%;height:auto'>"
+  return "<div class='upngLive'><img id='$id' width='$width' style='display:block;max-width:100%;height:auto'>"
        . "<script type='text/javascript'>(function(){var img=document.getElementById('$id');var busy=false;"
        . "function load(){if(!document.body.contains(img))return;"
        . "if(document.hidden||busy){setTimeout(load,300);return;}"
@@ -307,7 +307,7 @@ sub UnifiProtectNG_2html {
     }
   }
   return 'no cameras' if (!@list);
-  return join('', map { "<div style='display:inline-block;vertical-align:top;margin:0 6px 6px 0'>" . UnifiProtectNGDevice_Live($_, $width, 1) . "</div>" } @list);
+  return "<div style='display:flex;flex-wrap:wrap;align-items:flex-start;gap:4px'>" . join('', map { UnifiProtectNGDevice_Live($_, $width, 1) } @list) . "</div>";
 }
 
 sub UnifiProtectNGDevice_detailFn {
