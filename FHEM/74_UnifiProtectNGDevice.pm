@@ -263,14 +263,14 @@ sub UnifiProtectNGDevice_ResetEvents {
 # ---------------------------------------------------------------- live picture in FHEMWEB (detail view / room summary)
 # Refreshes a snapshot every liveInterval ms (default 1000) through the bridge's CGI; pauses while the browser tab is hidden.
 sub UnifiProtectNGDevice_Live {
-  my ($d, $width) = @_;
+  my ($d, $width, $force) = @_;
   my $h = $defs{$d};
   return '' if (!$h || ($h->{MODELKEY} // '') ne 'camera' || !$h->{IODev});
   return '' if (AttrVal($d, 'liveView', 1) eq '0');
   my $iv = AttrVal($d, 'liveInterval', 1000);
   $iv = 1000 if ($iv !~ /^\d+$/ || $iv < 200);
-  $width = AttrVal($d, 'liveWidth', $width // 640);
-  $width = 640 if ($width !~ /^\d+$/);
+  $width = AttrVal($d, 'liveWidth', $width // 640) if (!$force);
+  $width = 640 if (!defined $width || $width !~ /^\d+$/);
   (my $id = "upng_$d") =~ s/[^A-Za-z0-9_]/_/g;
   my $base = "$FW_ME/UnifiProtectNG?dev=$d&width=$width";
   return "<div class='upngLive'><img id='$id' width='$width' style='max-width:100%;height:auto'>"
@@ -281,6 +281,33 @@ sub UnifiProtectNGDevice_Live {
        . "n.onload=function(){img.src=n.src;busy=false;setTimeout(load,$iv);};"
        . "n.onerror=function(){busy=false;setTimeout(load,5000);};"
        . "n.src='$base&ts='+Date.now();}load();})();</script></div>";
+}
+
+# Overview of several cameras, e.g. for a weblink:
+#   define wl_Kameras weblink htmlCode {UnifiProtectNG_2html('System_Unifi_ProtectNG','Garage,Eingang',400)}
+# $cams: comma separated FHEM device names or Protect ids (empty = all cameras that are connected); $width in px per picture
+sub UnifiProtectNG_2html {
+  my ($io, $cams, $width) = @_;
+  $io = $io->{NAME} if (ref($io) eq 'HASH');
+  return 'no such bridge' if (!$io || !$defs{$io});
+  $width = 320 if (!$width || $width !~ /^\d+$/);
+  my @list;
+  if (defined $cams && $cams ne '') {
+    foreach my $c (split(/\s*,\s*/, $cams)) {
+      my $d = $defs{$c} ? $c : undef;
+      $d //= ($modules{UnifiProtectNGDevice}{defptr}{$c} // {})->{NAME};
+      push @list, $d if ($d);
+    }
+  } else {
+    foreach my $k (sort keys %{ $modules{UnifiProtectNGDevice}{defptr} // {} }) {
+      my $dh = $modules{UnifiProtectNGDevice}{defptr}{$k};
+      next if (!$dh || ($dh->{MODELKEY} // '') ne 'camera' || ($dh->{IODev} && $dh->{IODev}{NAME} ne $io));
+      next if (lc(ReadingsVal($dh->{NAME}, 'state', '')) eq 'disconnected');
+      push @list, $dh->{NAME};
+    }
+  }
+  return 'no cameras' if (!@list);
+  return join('', map { "<div style='display:inline-block;vertical-align:top;margin:0 6px 6px 0'>" . UnifiProtectNGDevice_Live($_, $width, 1) . "</div>" } @list);
 }
 
 sub UnifiProtectNGDevice_detailFn {
