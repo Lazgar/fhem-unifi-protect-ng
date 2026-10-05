@@ -221,6 +221,19 @@ def main():
         check("set videoMode with invalid value is refused", "videoMode:" in fhem("set %s videoMode nonsense" % cam))
         fhem('set %s smartDetectObjectTypes person,animal' % cam)
         check("set smartDetectObjectTypes", wait(lambda: any(p["body"] == {"smartDetectSettings": {"objectTypes": ["person", "animal"]}} for p in ctl("state")["patches"]), 5))
+        sl = fhem("set %s ?" % cam)
+        check("set list offers check boxes for object and audio types",
+              "smartDetectObjectTypes:multiple-strict,person,vehicle,animal" in sl and "smartDetectAudioTypes:multiple-strict,alrmSmoke,alrmBark" in sl, sl)
+        check("set smartDetectObjectTypes with unknown type is refused", "unknown type" in fhem("set %s smartDetectObjectTypes person,dragon" % cam))
+        fhem("set %s smartDetectAudioTypes alrmBark" % cam)
+        check("set smartDetectAudioTypes", wait(lambda: any(p["body"] == {"smartDetectSettings": {"audioTypes": ["alrmBark"]}} for p in ctl("state")["patches"]), 5))
+        check("compact readings: short names, no clutter",
+              reading(cam, "smartTypes") == "person,vehicle,animal" and reading(cam, "osdSettings_isDateEnabled") is None and reading(cam, "featureFlags_hasHdr") is None,
+              (reading(cam, "smartTypes"), reading(cam, "osdSettings_isDateEnabled")))
+        fhem("attr %s readings full" % cam)
+        check("readings full brings the long names back", wait(lambda: reading(cam, "osdSettings_isDateEnabled") == "1", 5), reading(cam, "osdSettings_isDateEnabled"))
+        fhem("attr %s readings compact" % cam)
+        check("readings compact removes them again", wait(lambda: reading(cam, "osdSettings_isDateEnabled") is None, 5))
         fhem('set %s patch {"name":"Garage Neu"}' % cam)
         check("set patch {json}", wait(lambda: any(p["body"] == {"name": "Garage Neu"} for p in ctl("state")["patches"]), 5))
         fhem("set %s ptzGoto 2" % cam)

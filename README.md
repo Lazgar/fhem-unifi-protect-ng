@@ -59,6 +59,10 @@ define wl_Cameras weblink htmlCode {UnifiProtectNG_2html('<bridge>', '<cam1>,<ca
 ```
 Arguments: bridge name, comma separated camera devices or Protect ids (empty = all connected cameras), picture width in px.
 
+## Readings: compact vs. full
+
+By default (`attr <dev> readings compact`) rarely useful values (`osdSettings_*`, most `featureFlags_*`, `guid`, ...) are not created and long names are shortened (`smartTypes`, `smartAudioTypes`, `videoModes`, `floodLed`, `welcomeLed`). `attr <dev> readings full` creates everything the console reports. Object and audio detection types are set with check boxes (`set <cam> smartDetectObjectTypes`, `smartDetectAudioTypes`); the choices come from what the camera supports.
+
 ## Limits of the official API (compared with the unofficial interface)
 Not available through the Integration API, therefore not available here: IR LED mode/level, recording mode, `isRecording`, camera
 health values (WiFi quality, uptime), event statistics and NVR statistics (CPU, storage, disk health). A hybrid setup with an older

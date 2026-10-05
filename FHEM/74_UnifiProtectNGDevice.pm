@@ -55,7 +55,7 @@ sub UnifiProtectNGDevice_Initialize {
   $hash->{FW_detailFn}  = 'UnifiProtectNGDevice_detailFn';
   $hash->{FW_summaryFn} = 'UnifiProtectNGDevice_summaryFn';
 
-  $hash->{AttrList} = 'disable:1,0 snapshotDir eventResetTime liveView:1,0 liveWidth liveInterval liveInSummary:1,0 '
+  $hash->{AttrList} = 'disable:1,0 snapshotDir eventResetTime liveView:1,0 liveWidth liveInterval liveInSummary:1,0 readings:compact,full '
                     . $readingFnAttributes;
 }
 
@@ -159,6 +159,16 @@ sub UnifiProtectNGDevice_Flatten {
   }
 }
 
+# compact mode (default): drop rarely useful readings and shorten the long names
+my $UPNG_SKIP = qr/^(featureFlags_(has|supportFullHdSnapshot)|osdSettings_|guid$|hasPackageCamera$|isMicEnabled$)/;
+my %UPNG_SHORT = (
+  'featureFlags_smartDetectTypes'      => 'smartTypes',
+  'featureFlags_smartDetectAudioTypes' => 'smartAudioTypes',
+  'featureFlags_videoModes'            => 'videoModes',
+  'ledSettings_floodLed'               => 'floodLed',
+  'ledSettings_welcomeLed'             => 'welcomeLed',
+);
+
 sub UnifiProtectNGDevice_ApplyDevice {
   my ($hash, $item) = @_;
   my %flat;
@@ -167,21 +177,39 @@ sub UnifiProtectNGDevice_ApplyDevice {
 
   $flat{state} = lc($flat{state}) if (defined $flat{state});
 
+  my $compact = AttrVal($hash->{NAME}, 'readings', 'compact') ne 'full';
   readingsBeginUpdate($hash);
   foreach my $k (sort keys %flat) {
-    my $name = $UPNG_ALIAS{$k} // $k;
+    next if ($compact && $k =~ $UPNG_SKIP);
+    my $name = $UPNG_ALIAS{$k} // ($compact ? $UPNG_SHORT{$k} : undef) // $k;
     my $v = $flat{$k};
     $v = UnifiProtectNGDevice_Time($v) if ($k =~ /(At|^lastMotion)$/);
     $v = ($v ? 'on' : 'off') if ($k eq 'ledSettings_isEnabled' || $k eq 'lightDeviceSettings_isIndicatorEnabled');
     readingsBulkUpdateIfChanged($hash, $name, $v);
   }
   readingsEndUpdate($hash, 1);
-  $hash->{helper}{api} = $item;      # last known full/partial data (used for set commands, features)
+  UnifiProtectNGDevice_Prune($hash) if ($compact);
+  UnifiProtectNGDevice_Merge($hash->{helper}{api} //= {}, $item);   # accumulated device data (used for set commands, features)
 
   if (ref($item->{featureFlags}) eq 'HASH') {
     $hash->{FEATURES} = join(',', grep { $item->{featureFlags}{$_} && !ref($item->{featureFlags}{$_}) } sort keys %{ $item->{featureFlags} });
   }
   $hash->{NAME_PROTECT} = $item->{name} if (defined $item->{name});
+}
+
+sub UnifiProtectNGDevice_Merge {
+  my ($dst, $src) = @_;
+  foreach my $k (keys %$src) {
+    if (ref($src->{$k}) eq 'HASH' && ref($dst->{$k}) eq 'HASH') { UnifiProtectNGDevice_Merge($dst->{$k}, $src->{$k}); }
+    else { $dst->{$k} = $src->{$k}; }
+  }
+}
+
+sub UnifiProtectNGDevice_Prune {              # remove readings that compact mode does not create any more
+  my ($hash) = @_;
+  foreach my $r (keys %{ $hash->{READINGS} // {} }) {
+    delete $hash->{READINGS}{$r} if ($r =~ $UPNG_SKIP || exists $UPNG_SHORT{$r});
+  }
 }
 
 # ---------------------------------------------------------------- events -> readings
@@ -344,8 +372,12 @@ sub UnifiProtectNGDevice_Set {
   my @l = ('patch');
 
   if ($m eq 'camera') {
-    push @l, ('micVolume:slider,0,1,100', 'videoMode:' . join(',', @UPNG_VIDEO_MODES), 'hdr:auto,on,off', 'statusLed:on,off',
-              'smartDetectObjectTypes', 'name', 'ptzGoto', 'ptzPatrolStart', 'ptzPatrolStop:noArg', 'snapshot', 'snapshotHQ:noArg');
+    my $ff = ref($hash->{helper}{api}) eq 'HASH' && ref($hash->{helper}{api}{featureFlags}) eq 'HASH' ? $hash->{helper}{api}{featureFlags} : {};
+    my @ot = ref($ff->{smartDetectTypes}) eq 'ARRAY' && @{ $ff->{smartDetectTypes} } ? @{ $ff->{smartDetectTypes} } : @UPNG_OBJECT_TYPES;
+    my @at = ref($ff->{smartDetectAudioTypes}) eq 'ARRAY' ? @{ $ff->{smartDetectAudioTypes} } : ();
+    my @vm = ref($ff->{videoModes}) eq 'ARRAY' && @{ $ff->{videoModes} } ? @{ $ff->{videoModes} } : @UPNG_VIDEO_MODES;
+    push @l, ('micVolume:slider,0,1,100', 'videoMode:' . join(',', @vm), 'hdr:auto,on,off', 'statusLed:on,off',
+              'smartDetectObjectTypes:multiple-strict,' . join(',', @ot), (@at ? ('smartDetectAudioTypes:multiple-strict,' . join(',', @at)) : ()), 'name', 'ptzGoto', 'ptzPatrolStart', 'ptzPatrolStop:noArg', 'snapshot', 'snapshotHQ:noArg');
   } elsif ($m eq 'light') {
     push @l, ('ledLevel:slider,1,1,6', 'pirSensitivity:slider,0,1,100', 'pirDuration', 'indicator:on,off', 'forceOn:on,off', 'mode:always,motion,off', 'name');
   } elsif ($m =~ /^(sensor|chime|viewer)$/) {
@@ -370,7 +402,8 @@ sub UnifiProtectNGDevice_Set {
     return UnifiProtectNGDevice_Patch($hash, { micVolume => $arg + 0 }, $cmd);
   }
   if ($cmd eq 'videoMode') {
-    return 'videoMode: ' . join('|', @UPNG_VIDEO_MODES) if (!grep { $_ eq $arg } @UPNG_VIDEO_MODES);
+    my @vm = map { (split(/:/, $_, 2))[1] =~ /^(.*)$/ ? split(/,/, $1) : () } grep { /^videoMode:/ } @l;
+    return 'videoMode: ' . join('|', @vm) if (!grep { $_ eq $arg } @vm);
     return UnifiProtectNGDevice_Patch($hash, { videoMode => $arg }, $cmd);
   }
   if ($cmd eq 'hdr') {
@@ -382,9 +415,16 @@ sub UnifiProtectNGDevice_Set {
     return UnifiProtectNGDevice_Patch($hash, { ledSettings => { isEnabled => ($arg eq 'on' ? JSON::true : JSON::false) } }, $cmd);
   }
   if ($cmd eq 'smartDetectObjectTypes') {
-    my @t = grep { $_ ne '' } split(/[ ,]+/, $arg);
-    foreach my $t (@t) { return "unknown type $t, allowed: " . join(',', @UPNG_OBJECT_TYPES) if (!grep { $_ eq $t } @UPNG_OBJECT_TYPES); }
+    my @t = grep { $_ ne '' && $_ ne 'none' } split(/[ ,]+/, $arg);
+    my @allowed = map { (split(/:/, $_, 2))[1] =~ /^multiple-strict,(.*)$/ ? split(/,/, $1) : () } grep { /^smartDetectObjectTypes:/ } @l;
+    foreach my $t (@t) { return "unknown type $t, allowed: " . join(',', @allowed) if (!grep { $_ eq $t } @allowed); }
     return UnifiProtectNGDevice_Patch($hash, { smartDetectSettings => { objectTypes => \@t } }, $cmd);
+  }
+  if ($cmd eq 'smartDetectAudioTypes') {
+    my @t = grep { $_ ne '' && $_ ne 'none' } split(/[ ,]+/, $arg);
+    my @allowed = map { (split(/:/, $_, 2))[1] =~ /^multiple-strict,(.*)$/ ? split(/,/, $1) : () } grep { /^smartDetectAudioTypes:/ } @l;
+    foreach my $t (@t) { return "unknown type $t, allowed: " . join(',', @allowed) if (!grep { $_ eq $t } @allowed); }
+    return UnifiProtectNGDevice_Patch($hash, { smartDetectSettings => { audioTypes => \@t } }, $cmd);
   }
   if ($cmd eq 'ledLevel' || $cmd eq 'pirSensitivity' || $cmd eq 'pirDuration') {
     return "$cmd needs a number" if ($arg !~ /^\d+$/);
@@ -483,6 +523,13 @@ sub UnifiProtectNGDevice_Attr {
   my ($cmd, $name, $attrName, $attrVal) = @_;
   if ($attrName eq 'eventResetTime' && $cmd eq 'set' && $attrVal !~ /^\d+$/) {
     return 'eventResetTime must be a number of seconds (0 = off)';
+  }
+  if ($attrName eq 'readings' && $cmd eq 'set' && $attrVal ne 'compact' && $attrVal ne 'full') {
+    return 'readings must be compact or full';
+  }
+  if ($attrName eq 'readings' && $init_done) {   # re-apply the last known data with the new mode
+    my $h = $defs{$name};
+    InternalTimer(gettimeofday() + 0.5, sub { UnifiProtectNGDevice_ApplyDevice($h, $h->{helper}{api}) if ($h && ref($h->{helper}{api}) eq 'HASH'); }, $h, 0);
   }
   return undef;
 }
