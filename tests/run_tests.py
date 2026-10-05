@@ -108,6 +108,7 @@ attr global autoload_undefined_devices 1
 define telnetPort telnet %d
 define autocreate autocreate
 attr autocreate autosave 0
+define WEB FHEMWEB 18083 global
 define bridge UnifiProtectNG 127.0.0.1:%d
 attr bridge checkInterval 3
 attr bridge refreshInterval 0
@@ -233,6 +234,30 @@ def main():
         check("snapshot written as JPEG file", wait(lambda: os.path.exists(snap + "/test.jpg") and open(snap + "/test.jpg", "rb").read(4) == b"\xff\xd8\xff\xe0", 8))
         fhem("get %s rtspsStream" % cam)
         check("get rtspsStream stores rtspsUrl_high", wait(lambda: (reading(cam, "rtspsUrl_high") or "").startswith("rtsps://"), 8), reading(cam, "rtspsUrl_high"))
+        # live picture (FHEMWEB CGI proxy + detail view)
+        def live():
+            r = urllib.request.urlopen("http://127.0.0.1:18083/fhem/UnifiProtectNG?dev=%s&width=320" % cam, timeout=10)
+            return r.status, r.read(), r.headers.get("Content-Type", "")
+        try:
+            live()                                       # first request: cold start (may be refused for 'Connection: close' clients like urllib)
+        except Exception:
+            pass
+        time.sleep(1.5)
+        try:
+            st, body, ct = live()                       # second request: answered from the cache for any client
+            check("live picture CGI returns the JPEG", st == 200 and body[:4] == b"\xff\xd8\xff\xe0" and "image/jpeg" in ct, (st, body[:4]))
+            time.sleep(0.6)
+            st2, body2, ct2 = live()
+            check("live picture keeps working (cache + background refresh)", st2 == 200 and body2[:4] == b"\xff\xd8\xff\xe0")
+        except Exception as e:
+            check("live picture CGI returns the JPEG", False, e)
+        try:
+            urllib.request.urlopen("http://127.0.0.1:18083/fhem/UnifiProtectNG?dev=nonexistent", timeout=10)
+            check("live picture CGI rejects unknown device", False)
+        except urllib.error.HTTPError as e:
+            check("live picture CGI rejects unknown device", e.code == 400, e.code)
+        page = urllib.request.urlopen("http://127.0.0.1:18083/fhem?detail=%s" % cam, timeout=10).read().decode("latin-1")
+        check("detail view contains the live picture element", "id='upng_%s'" % cam in page and "UnifiProtectNG?dev=%s" % cam in page)
         check("get raw returns JSON", '"modelKey"' in fhem("get %s raw" % cam))
 
         # --- recovery: websocket killed (Protect restart)

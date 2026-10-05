@@ -44,6 +44,9 @@ sub UnifiProtectNG_Initialize {
   $hash->{Clients}    = 'UnifiProtectNGDevice';
   $hash->{MatchList}  = { '1:UnifiProtectNGDevice' => '^UProtNG:' };
 
+  # FHEMWEB endpoint: live pictures (snapshots proxied with the API key, the key never reaches the browser)
+  $data{FWEXT}{'/UnifiProtectNG'}{FUNC} = 'UnifiProtectNG_CGI';
+
   $hash->{AttrList}   = 'disable:1,0 verifySSL:0,1 autoCreate:1,0 apiPath '
                       . 'checkInterval refreshInterval wsEvents:1,0 wsDevices:1,0 '
                       . $readingFnAttributes;
@@ -497,6 +500,79 @@ sub UnifiProtectNG_LoadAllRefresh {
       }
     });
   }
+}
+
+# ---------------------------------------------------------------- FHEMWEB: snapshot proxy for live pictures
+# GET <FHEMWEB>/UnifiProtectNG?dev=<UnifiProtectNGDevice>[&hq=1]  -> image/jpeg
+# The newest picture is kept in a small cache per camera. A request is answered immediately from the cache (works for every HTTP client)
+# and starts a non-blocking refresh for the next request. Only the very first request waits for the console (answered asynchronously,
+# which needs a keep-alive connection like a browser uses). The API key never reaches the browser.
+sub UnifiProtectNG_Fetch {
+  my ($io, $id, $hq, $cb) = @_;
+  my $s = ($io->{helper}{snap}{$id}{ $hq ? 'hq' : 'sd' } //= {});
+  return if ($s->{pending} && time() - $s->{pending} < 15);
+  $s->{pending} = time();
+  my $q = $hq ? '?highQuality=true' : '';
+  UnifiProtectNG_Api($io, 'GET', "/v1/cameras/$id/snapshot$q", undef, sub {
+    my ($h, $json, $raw, $code, $err) = @_;
+    $s->{pending} = 0;
+    if (!$err && $code == 200 && defined $raw && length($raw) >= 100) {
+      $s->{data} = $raw;
+      $s->{ts}   = gettimeofday();
+      $cb->($raw, undef) if ($cb);
+    } else {
+      $cb->(undef, $err // "HTTP $code") if ($cb);
+    }
+  }, { raw => 1 });
+}
+
+sub UnifiProtectNG_CGI {
+  my ($url) = @_;
+  my ($cmd, $c) = FW_digestCgi($url);
+  my $cname = $FW_cname;
+  my $dev   = $FW_webArgs{dev} // '';
+  my $hq    = $FW_webArgs{hq} ? 1 : 0;
+  my $d     = $defs{$dev};
+
+  my $reply = sub {
+    my ($code, $type, $body) = @_;
+    my $cl = $defs{$cname} ? $defs{$cname}{CD} : undef;
+    return if (!$cl);
+    my $out = "HTTP/1.1 $code\r\nContent-Type: $type\r\nContent-Length: " . length($body) . "\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n" . $body;
+    my $off = 0;                                                    # real snapshots are ~1 MB: the socket is non-blocking, so loop until everything is written
+    my $end = gettimeofday() + 8;
+    while ($off < length($out) && gettimeofday() < $end) {
+      my $n = syswrite($cl, $out, 65536, $off);
+      if (defined $n) { $off += $n; next; }
+      last if (!($!{EAGAIN} || $!{EWOULDBLOCK}));
+      my $w = '';
+      vec($w, fileno($cl), 1) = 1;
+      select(undef, $w, undef, 0.5);
+    }
+  };
+
+  if (!$d || ($d->{TYPE} // '') ne 'UnifiProtectNGDevice' || ($d->{MODELKEY} // '') ne 'camera' || !$d->{IODev}) {
+    $reply->('400 Bad Request', 'text/plain', 'unknown device');
+    return undef;
+  }
+  my $io = $d->{IODev};
+  my $id = $d->{PROTECTID};
+
+  my $s = $io->{helper}{snap}{$id}{ $hq ? 'hq' : 'sd' };
+  if ($s && $s->{data} && time() - $s->{ts} < 30) {                 # fresh enough: answer now, refresh in the background
+    $reply->('200 OK', 'image/jpeg', $s->{data});
+    UnifiProtectNG_Fetch($io, $id, $hq) if (gettimeofday() - $s->{ts} > 0.4 && ($io->{STATE} // '') eq 'opened');
+    return undef;
+  }
+  if (($io->{STATE} // '') ne 'opened') {
+    $reply->('503 Service Unavailable', 'text/plain', 'bridge not connected');
+    return undef;
+  }
+  UnifiProtectNG_Fetch($io, $id, $hq, sub {                         # cold start: answer when the picture arrives
+    my ($raw, $err) = @_;
+    $raw ? $reply->('200 OK', 'image/jpeg', $raw) : $reply->('502 Bad Gateway', 'text/plain', "snapshot failed: $err");
+  });
+  return undef;
 }
 
 # ---------------------------------------------------------------- set / get / attr

@@ -47,6 +47,11 @@ all: `patch {json}`. Get: `raw`, `rtspsStream` (camera). The bridge has `get dev
 
 See the commandref (`help UnifiProtectNG`, `help UnifiProtectNGDevice`) for attributes.
 
+## Live picture
+
+The camera detail page (and optionally the room/summary view, `attr <cam> liveInSummary 1`) shows a continuously refreshed snapshot (default 1 s, `liveInterval` in ms, min 200; `liveWidth`; switch off with `liveView 0`).
+The official API provides no browser-playable stream, only RTSPS (`get <cam> rtspsStream` for VLC/go2rtc) and snapshots. Pictures are served via the FHEMWEB extension `/fhem/UnifiProtectNG?dev=<cam>[&hq=1]` with a short cache, so many viewers do not multiply the load on the console.
+
 ## Limits of the official API (compared with the unofficial interface)
 Not available through the Integration API, therefore not available here: IR LED mode/level, recording mode, `isRecording`, camera
 health values (WiFi quality, uptime), event statistics and NVR statistics (CPU, storage, disk health). A hybrid setup with an older

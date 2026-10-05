@@ -52,7 +52,11 @@ sub UnifiProtectNGDevice_Initialize {
   $hash->{ParseFn}  = 'UnifiProtectNGDevice_Parse';
   $hash->{Match}    = '^UProtNG:';
 
-  $hash->{AttrList} = 'disable:1,0 snapshotDir eventResetTime ' . $readingFnAttributes;
+  $hash->{FW_detailFn}  = 'UnifiProtectNGDevice_detailFn';
+  $hash->{FW_summaryFn} = 'UnifiProtectNGDevice_summaryFn';
+
+  $hash->{AttrList} = 'disable:1,0 snapshotDir eventResetTime liveView:1,0 liveWidth liveInterval liveInSummary:1,0 '
+                    . $readingFnAttributes;
 }
 
 # ---------------------------------------------------------------- define
@@ -254,6 +258,40 @@ sub UnifiProtectNGDevice_ResetEvents {
   }
   readingsEndUpdate($hash, 1);
   $hash->{helper}{ongoing} = {};
+}
+
+# ---------------------------------------------------------------- live picture in FHEMWEB (detail view / room summary)
+# Refreshes a snapshot every liveInterval ms (default 1000) through the bridge's CGI; pauses while the browser tab is hidden.
+sub UnifiProtectNGDevice_Live {
+  my ($d, $width) = @_;
+  my $h = $defs{$d};
+  return '' if (!$h || ($h->{MODELKEY} // '') ne 'camera' || !$h->{IODev});
+  return '' if (AttrVal($d, 'liveView', 1) eq '0');
+  my $iv = AttrVal($d, 'liveInterval', 1000);
+  $iv = 1000 if ($iv !~ /^\d+$/ || $iv < 200);
+  $width = AttrVal($d, 'liveWidth', $width // 640);
+  $width = 640 if ($width !~ /^\d+$/);
+  (my $id = "upng_$d") =~ s/[^A-Za-z0-9_]/_/g;
+  my $base = "$FW_ME/UnifiProtectNG?dev=$d&width=$width";
+  return "<div class='upngLive'><img id='$id' width='$width' style='max-width:100%;height:auto'>"
+       . "<script type='text/javascript'>(function(){var img=document.getElementById('$id');var busy=false;"
+       . "function load(){if(!document.body.contains(img))return;"
+       . "if(document.hidden||busy){setTimeout(load,300);return;}"
+       . "busy=true;var n=new Image();"
+       . "n.onload=function(){img.src=n.src;busy=false;setTimeout(load,$iv);};"
+       . "n.onerror=function(){busy=false;setTimeout(load,5000);};"
+       . "n.src='$base&ts='+Date.now();}load();})();</script></div>";
+}
+
+sub UnifiProtectNGDevice_detailFn {
+  my ($FW_wname, $d, $room, $pageHash) = @_;
+  return UnifiProtectNGDevice_Live($d, 640);
+}
+
+sub UnifiProtectNGDevice_summaryFn {
+  my ($FW_wname, $d, $room, $pageHash) = @_;
+  return '' if (AttrVal($d, 'liveInSummary', 0) ne '1');
+  return UnifiProtectNGDevice_Live($d, 320);
 }
 
 # ---------------------------------------------------------------- set / get
@@ -461,6 +499,9 @@ sub UnifiProtectNGDevice_Attr {
   <ul>
     <li>snapshotDir: directory for snapshots (default /tmp)</li>
     <li>eventResetTime: seconds after which a running event is reset to off if its end event got lost (default 300, 0 = never)</li>
+    <li>liveView 1|0: show a live picture (snapshot refreshed every liveInterval ms) in the camera's detail view (default 1)</li>
+    <li>liveWidth: picture width in pixels (default 640), liveInterval: refresh time in ms (default 1000, minimum 200)</li>
+    <li>liveInSummary 1|0: also show the live picture in room overviews (default 0)</li>
   </ul>
 </ul>
 
